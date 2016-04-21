@@ -121,7 +121,7 @@ let parseXml (xml: XElement) =
 
 let fsharpSafe =
     function
-    | "type" | "global" as x ->
+    | "type" | "global" | "internal" as x ->
         sprintf "%s'" x
     | x -> x
 
@@ -135,7 +135,7 @@ let genMethodParse name (fields: (string * GenType) list) =
         | [] ->
             yield sprintf "        %s" typeName
         | _ ->
-            yield "        let off = 0"
+            yield "        let off = 4"
             yield "        let bit = 0"
             let rec bits agg rem off b =
                 match rem with
@@ -162,26 +162,31 @@ let genMethodParse name (fields: (string * GenType) list) =
 
 let rec gather agg rem =
     match rem, agg with
-    | [], _ -> agg
+    | [], _ -> List.rev agg |> List.map List.rev
     | (_, Bit) :: _, agg ->
-        bits agg rem
+        bits ([] :: agg) rem
     | h :: rem, c :: aggRem ->
         gather ((h :: c) :: aggRem) rem
     | h :: rem, [] ->
         gather ((h :: []) :: []) rem
 and bits agg rem =
     match rem, agg with
-    | [], _ -> agg
+    | [], _ -> List.rev agg |> List.map List.rev
     | (n, Bit) :: rem, c :: aggRem ->
         bits (((n, Bit) :: c) :: aggRem) rem
     | (n, Bit) :: rem, [] ->
         bits (((n, Bit) :: []) :: []) rem
     | _ ->
         gather ([] :: agg) rem
+
+        (*
+["one", Short ; "two", Bit; "three", Bit; "four", Short; "five", Long; "six", Bit]
+|> gather []
+*)
         
 let genMethodPickle name (fields: (string * GenType) list) =
     let typeName = Casing.pascal name
-    [   yield sprintf "    static member pickle (x: %s) =" typeName
+    [   yield sprintf "    static member pickle (x: %sData) =" typeName
         match fields with
         | [] ->
             yield sprintf "        %s" typeName
@@ -190,7 +195,7 @@ let genMethodPickle name (fields: (string * GenType) list) =
             for g in gather [] fields do
                 match g.[0] with
                 | _, Bit -> //do bits
-                    let text = g |> List.map (fst >> Casing.pascal) |> (fun s -> System.String.Join("; ", s))
+                    let text = g |> List.map (fst >> Casing.pascal >> sprintf "x.%s") |> (fun s -> System.String.Join("; ", s))
                     yield (sprintf "            let bits = [ %s ]" text)
                     yield "            yield! writeBits bits"
                 | _ -> //do others
@@ -198,18 +203,54 @@ let genMethodPickle name (fields: (string * GenType) list) =
                         yield sprintf "            yield! write%A x.%s" t (Casing.pascal n)
             yield "        |]"
             ]
+
 let genMethod name fields =
     let typeName = Casing.pascal name
     match fields with
-    | [] ->
-        [ sprintf "type %s = %s" typeName typeName ]
+    | [] -> []
     | _ ->
-        [ yield sprintf "type %s = {" typeName
+        [ yield sprintf "type %sData = {" typeName
           for n, t in fields do
             yield sprintf "    %s: %A" (Casing.pascal n) t 
           yield "} with"
           yield! genMethodParse name fields
           yield! genMethodPickle name fields ]
+
+let genParseMethod (c: GenClass) =
+    [ yield "    static member parse (payload: byte []) ="
+      yield "        match toShort payload 0, toShort payload 2 with"
+      for m in c.Methods do
+          match m.Fields with
+          | [] ->
+              let mn = Casing.pascal m.Name
+              yield sprintf "        | %ius, %ius -> %s" c.Index m.Index mn
+          | _ ->
+              let mn = Casing.pascal m.Name
+              yield sprintf "        | %ius, %ius -> %sData.parse payload |> %s" c.Index m.Index mn mn
+      yield "        | x -> failwith (sprintf \"%A not implemented\" x)"
+      yield sprintf "    static member pickle (x: %s) = [|" (Casing.pascal c.Name)
+      yield sprintf "        yield! fromShort %ius" c.Index
+      yield "        match x with"
+      for m in c.Methods do
+          match m.Fields with
+          | [] ->
+              yield sprintf "        | %s -> yield! fromShort %ius" (Casing.pascal m.Name) m.Index
+          | _ ->
+              yield sprintf "        | %s data -> yield! fromShort %ius; yield! %sData.pickle data" (Casing.pascal m.Name) m.Index (Casing.pascal m.Name)
+      yield "    |]"
+    ]
+
+let genDUType (c: GenClass) =
+    [ yield sprintf "type %s =" (Casing.pascal c.Name)
+      for m in c.Methods do
+        match m.Fields with
+        | [] ->
+            let mn = Casing.pascal m.Name
+            yield sprintf "    | %s" mn 
+        | _ ->
+            let mn = Casing.pascal m.Name
+            yield sprintf "    | %s of %sData" mn mn
+      yield "with" ]
 
 let genClass (m: GenClass) =
     [ yield sprintf "module %s" (Casing.pascal m.Name)
@@ -225,13 +266,23 @@ let genClass (m: GenClass) =
         yield "\r\n"
       for m in m.Methods do
         yield! genMethod m.Name m.Fields
-        yield "\r\n" ]
+        yield "\r\n" 
+      yield! genDUType m
+      yield! genParseMethod m ]
+
     |> fun x -> System.String.Join("\r\n", x)
+
+(*
+let parseMethod (payload: byte []) =
+    match asShort (payload.[0..1]) 0,  asShort (payload.[2..3]) 0 with
+    | 10us, 10us -> StartData.parse payload.[4 ..] |> Start
+    | x -> failwith (sprintf "%A not implemented" x)
+    *)
 
 parseXml xml
 |> Seq.toList
 |> List.iter (fun c -> 
     let text = genClass c
-    System.IO.File.WriteAllText("Gen" + Casing.pascal c.Name + ".fsx", text))
+    System.IO.File.WriteAllText(__SOURCE_DIRECTORY__ </> "Gen" + Casing.pascal c.Name + ".fsx", text))
     
 

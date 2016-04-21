@@ -21,7 +21,7 @@ let asLongLong (data: byte[]) offset =
 let asLong (data: byte[]) offset =
     let data = data.[offset .. offset + 3]
     BitConverter.ToUInt32(Array.rev data, 0)//network byte order
-let asShort (data: byte[]) offset =
+let toShort (data: byte[]) offset =
     let data = data.[offset .. offset + 1]
     BitConverter.ToUInt16(Array.rev data, 0)
 let fromShort (v: UInt16) =
@@ -38,4 +38,4 @@ let (|Long|_|) (data: byte[]) =
     Option.protect (fun() -> asLong data 0)
 
 let (|Short|_|) (data: byte[]) =
-    Option.protect (fun() -> asShort data 0)
+    Option.protect (fun() -> toShort data 0)
