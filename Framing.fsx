@@ -1,35 +1,7 @@
 open System.Net.Sockets
-
-[<AutoOpen>]
-module Pervasives =
-    open System
-    module Option =
-        let protect f =
-            try f() |> Some with _ -> None
-
-    let (</>) a b = System.IO.Path.Combine(a,  b)
-    let asLongLong (data: byte[]) offset =
-        let data = data.[offset .. offset + 7]
-        BitConverter.ToUInt64(Array.rev data, 0)//network byte order
-    let asLong (data: byte[]) offset =
-        let data = data.[offset .. offset + 3]
-        BitConverter.ToUInt32(Array.rev data, 0)//network byte order
-    let asShort (data: byte[]) offset =
-        let data = data.[offset .. offset + 1]
-        BitConverter.ToUInt16(Array.rev data, 0)
-    let toShort (v: UInt16) =
-        BitConverter.GetBytes v |> Array.rev
-    let toLong (v: UInt32) =
-        BitConverter.GetBytes v |> Array.rev
-
-    let (|LongLong|_|) (data: byte[]) =
-        Option.protect (fun() -> asLongLong data 0)
-
-    let (|Long|_|) (data: byte[]) =
-        Option.protect (fun() -> asLong data 0)
-
-    let (|Short|_|) (data: byte[]) =
-        Option.protect (fun() -> asShort data 0)
+#if INTERACTIVE
+#load "Pervasives.fsx"
+#endif
 
 [<AutoOpen>]
 module AMQP =
@@ -82,8 +54,8 @@ and Frame =
             | Method (c, pl) | Header (c, pl) | Body (c, pl) -> 
                 let header = 
                     [| yield frame.Type() 
-                       yield! toShort c
-                       yield! pl.Length |> uint32 |> toLong |]
+                       yield! fromShort c
+                       yield! pl.Length |> uint32 |> fromLong |]
                 do! s.AsyncWrite header
                 do! s.AsyncWrite pl
             | Heartbeat ->
@@ -122,7 +94,7 @@ let readLongStr (data: byte[]) offset =
     offset + 4 + len, LongStr (data.[offset + 3 .. offset + 3 + len])
     
 let writeLongStr (LongStr str) =
-    [| yield! toLong (uint32 str.Length)
+    [| yield! fromLong (uint32 str.Length)
        yield! str |]
 
 type StartData =
@@ -173,71 +145,3 @@ async {
 |> Async.RunSynchronously
 
 
-//gen
-module Casing =
-    open System.Text
-    let (|ToUpper|) = System.Char.ToUpper
-    let rec private upper (sb: StringBuilder) chars =
-        match chars with
-        | [] -> sb.ToString()
-        | ToUpper c :: rest -> 
-            c |> sb.Append |> ignore
-            next sb rest
-    and next sb chars =
-        match chars with
-        | [] -> sb.ToString()
-        | '-' :: rest -> upper sb rest
-        | c :: rest ->
-            sb.Append c |> ignore
-            next sb rest
-    let pascal (s: string) =
-        let sb = new StringBuilder()
-        s.ToCharArray()
-        |> Array.toList
-        |> upper sb
-    let camel (s: string) =
-        let sb = new StringBuilder()
-        s.ToCharArray()
-        |> Array.toList
-        |> next sb
-        
-Casing.pascal "start-ok"
-Casing.camel "start-ok"++
-
-type GenType =
-    | Bit
-    | Octet
-    | Short
-    | Long
-    | LongLong
-    | ShortStr
-    | LongStr
-    | Timestamp
-    | Table
-    static member parse =
-        function
-        | "bit" -> Bit
-        | "octet" -> Octet
-        | "short" -> Short
-        | "long" -> Long
-        | "longlong" -> LongLong
-        | "shortstr" -> ShortStr
-        | "longstr"-> LongStr
-        | "timestamp" -> Timestamp
-        | "table" -> Table
-        | _ -> failwith "invalid gentype"
-
-type GenMethod =
-    { Name: string
-      Index: int
-      Fields: string * GenType }
-type GenClass =
-    { Name: string
-      Index: int
-      Properties: (string * GenType) list
-      Methods: GenMethod list }
-
-#r "System.Xml.Linq"
-open System.Xml.Linq
-open System.IO
-File.ReadAllText (__SOURCE_DIRECTORY__ </> "amqp0-9-1.stripped.xml")  |> XElement.Parse
