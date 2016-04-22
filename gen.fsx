@@ -89,17 +89,14 @@ let parseXml (xml: XElement) =
         | fields ->
             fields
             |> Seq.toList
-            |> List.choose (fun e ->
-                match e.Attribute (xn "reserved") with
-                | null ->
-                    let name = (e.Attribute (xn "name")).Value
-                    let domain = 
-                        match e.Attribute (xn "domain") with
-                        | null -> e.Attribute (xn "type") 
-                        | d -> d
-                    let domain = Map.find domain.Value domains 
-                    Some (name, GenType.parse domain)
-                | _ -> None)
+            |> List.map (fun e ->
+                let name = (e.Attribute (xn "name")).Value
+                let domain = 
+                    match e.Attribute (xn "domain") with
+                    | null -> e.Attribute (xn "type") 
+                    | d -> d
+                let domain = Map.find domain.Value domains 
+                name, GenType.parse domain)
     xml.Descendants (xn "class")
     |> Seq.map (fun c ->
         let name = c.Attribute(xn "name")

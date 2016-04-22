@@ -12,22 +12,31 @@ type Timestamp = uint64
 type LongStr = byte []
 
 type Field =
+    | BooleanField of bool
+    | ShortShortField of int
+    | ShortIntField of int16
+    | LongIntField of int
     | BitField of Bit
     | OctetField of Octet
     | ShortField of Short
     | LongField of Long
-    | LongLongField of Long
+    | LongLongIntField of int64
+    | LongLongField of LongLong
+    | FloatField of float32 
+    | DoubleField of float
+    | DecimalField of byte []
     | ShortStrField of ShortStr
     | LongStrField of LongStr 
     | TimestampField of Timestamp
     | TableField of Table
-//and Table = Map<string, Field>
-and Table = LongStr //TEMP
+    | NoField 
+and Table = Map<string, Field>
+//and Table = LongStr //TEMP
 
 let ProtocolHeader = 
     [| yield! "AMQP"B; yield! [| 0uy;0uy;9uy;1uy |] |]
 
-let AMQPFrameEnd = [|0uy; 206uy|]
+let AMQPFrameEnd = [|206uy|]
 
 let (|FrameEnd|_|) =
     function
@@ -51,6 +60,7 @@ and Frame =
     static member read (s: System.IO.Stream) =
         async {
             let! header = s.AsyncRead 7
+            printfn "frame header %A" header
             let t = header.[0]
             let chan = toShort header 1
             let size = asLong header 3 //TODO: casting unsigned to signed!
@@ -73,12 +83,15 @@ and Frame =
                     [| yield frame.Type() 
                        yield! fromShort c
                        yield! pl.Length |> uint32 |> fromLong |]
+                printfn "write frame header %A" header
                 do! s.AsyncWrite header
+                printfn "write frame payload %A" pl
                 do! s.AsyncWrite pl
             | Heartbeat ->
                 let header = [|4uy;0uy;0uy;0uy;0uy;0uy;0uy|]
                 do! s.AsyncWrite header
-            do! s.AsyncWrite AMQPFrameEnd }
+            printfn "write frame end"
+            s.WriteByte 206uy }
 
 let readOctet (data: byte[]) offset =
     offset + 1, data.[offset]
@@ -86,16 +99,42 @@ let readOctet (data: byte[]) offset =
 let readShort (data: byte[]) offset =
     offset + 2, toShort data offset
 
+let readShortInt (data: byte[]) offset =
+    offset + 2, toShortInt data offset
+
 let readLong (data: byte[]) offset =
     offset + 4, asLong data offset
+
+let readLongInt (data: byte[]) offset =
+    offset + 4, toLongInt data offset
 
 let readLongLong (data: byte[]) offset =
     offset + 8, asLongLong data offset
 
+let readLongLongInt (data: byte[]) offset =
+    offset + 8, asLongLongInt data offset
+
+let readFloat (data: byte[]) offset =
+    offset + 8, toFloat data offset
+
+let readDouble (data: byte[]) offset =
+    offset + 8, toDouble data offset
+
+let readDecimal (data: byte[]) offset =
+    offset + 5, data.[offset .. offset + 4] //TODO: actually parse this
+
 let readLongStr (data: byte[]) offset =
     let len = asLong data offset |> int
-    offset + 4 + len, (data.[offset + 3 .. offset + 3 + len])
+    offset + 4 + len, (data.[offset + 4 .. offset + 3 + len])
 
+let readChar (data: byte[]) offset =
+    offset+1, data.[offset] |> char
+
+let readTimestamp = readLongLong 
+    
+let readShortStr (data: byte[]) offset =
+    let len = data.[offset] |> int
+    offset + 1 + len, (System.Text.Encoding.UTF8.GetString(data.[offset + 1 .. offset + len]))
     (*
 amqp = protocol-header *amqp-unit
 
@@ -109,14 +148,14 @@ method-frame = %d1 frame-properties method-payload frame-end
 frame-properties = channel payload-size
 channel = short-uint ; Non-zero
 payload-size = long-uint
-method-payload = class-id method-id *amqp-field
+method-payload = class-id method-id *amqp-fieldfloat
 class-id = %x00.01-%xFF.FF
 method-id = %x00.01-%xFF.FF
 amqp-field = BIT / OCTET
- / short-uint / long-uint / long-long-uint
- / short-string / long-string
- / timestamp
- / field-table
+             / short-uint / long-uint / long-long-uint
+             / short-string / long-string
+             / timestamp
+             / field-table
 short-uint = 2*OCTET
 long-uint = 4*OCTET
 long-long-uint = 8*OCTET
@@ -143,7 +182,7 @@ field-value = 't' boolean
              / 'S' long-string
              / 'A' field-array
              / 'T' timestamp
-             / 'F' field-table
+             / 'F' field-table 
              / 'V'
 boolean = OCTET ; 0 = FALSE, else TRUE
 short-short-int = OCTET
@@ -160,24 +199,50 @@ frame-end = %xCE
 content = %d2 content-header *content-body
 content-header = frame-properties header-payload frame-end
 header-payload = content-class content-weight content-body-size
- property-flags property-list
+property-flags property-list
 content-class = OCTET
 content-weight = %x00
 content-body-size = long-long-uint
-property-flags = 15*BIT %b0 / 15*BIT %b1 property-flags
+property-flags = 15*BIT %b0 / 15*BIT %b1 property-flags8
 property-list = *amqp-field
 content-body = %d3 frame-properties body-payload frame-end
 body-payload = *OCTET
-
 heartbeat = %d8 %d0 %d0 frame-end
     *)
-let readTable = readLongStr //TODO
 
-let readTimestamp = readLongLong //TODO
-    
-let readShortStr (data: byte[]) offset =
-    let len = data.[0] |> int
-    offset + 2 + len, (System.Text.Encoding.UTF8.GetString(data.[offset + 1 .. offset + 1 + len]))
+let rec parseTable (data: byte []) offset =
+    let off, len = readLong data offset |> mapSnd int
+    let endOff = off + len
+    let mutable c = off
+    let fields =
+        [ while c < endOff do
+            let off, name = readShortStr data c
+            let off, field =
+                match readChar data off with
+                | off, 't' -> off+1, BooleanField (data.[off] > 0uy) //boolean
+                | off, 'b' -> off+1, ShortShortField (data.[off] |> int) //short-short-int
+                | off, 'B' -> off+1, OctetField (data.[off]) //short-short-uint
+                | off, 'U' -> readShortInt data off |> mapSnd ShortIntField//short-int
+                | off, 'u' -> readShort data off |> mapSnd ShortField //short-uint
+                | off, 'I' -> readLongInt data off |> mapSnd LongIntField //long-int
+                | off, 'i' -> readLong data off |> mapSnd LongField //long-uint
+                | off, 'L' -> readLongLongInt data off |> mapSnd LongLongIntField //long-long-int
+                | off, 'l' -> readLongLong data off |> mapSnd LongLongField //long-long-uint
+                | off, 'f' -> readFloat data off |> mapSnd FloatField //float
+                | off, 'd' -> readDouble data off |> mapSnd DoubleField //double
+                | off, 'D' -> readDecimal data off  |> mapSnd DecimalField //decimal-value
+                | off, 's' -> readShortStr data off |> mapSnd ShortStrField //short-string
+                | off, 'S' -> readLongStr data off |> mapSnd LongStrField //long-string
+                | off, 'T' -> readTimestamp data off |> mapSnd TimestampField //timestamp
+                | off, 'F' -> parseTable data off |> mapSnd TableField//field-table
+                | off, 'V' -> off, NoField
+                | off, f -> failwith (sprintf "unknown field type %A at %i" f off)
+            c <- off
+            yield name, field ]
+    c, fields |> Map.ofList
+        
+let readTable = parseTable
+
 
 let writeOctet (o: Octet) =
     [| o |]
@@ -197,7 +262,8 @@ let writeLongStr (str: LongStr) =
     [| yield! fromLong (uint32 str.Length)
        yield! str |]
 
-let writeTable = writeLongStr
+let writeTable x = 
+    [| yield! writeLongStr [| |] |] 
 
 let writeShortStr (str: ShortStr) =
     [| yield (byte str.Length)
