@@ -5,6 +5,9 @@ module Tx
 open Amqp
 
 
+let classId = 90us
+
+
 
 
 
@@ -26,14 +29,18 @@ type Tx =
     | RollbackOk
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 90us, 10us -> Select
-        | 90us, 11us -> SelectOk
-        | 90us, 20us -> Commit
-        | 90us, 21us -> CommitOk
-        | 90us, 30us -> Rollback
-        | 90us, 31us -> RollbackOk
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 90us ->
+            match toShort payload 2 with
+            | 10us -> Select
+            | 11us -> SelectOk
+            | 20us -> Commit
+            | 21us -> CommitOk
+            | 30us -> Rollback
+            | 31us -> RollbackOk
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Tx) = [|
         yield! fromShort 90us
         match x with
@@ -44,3 +51,5 @@ with
         | Rollback -> yield! fromShort 30us
         | RollbackOk -> yield! fromShort 31us
     |]
+
+let (|Tx|_|) = Tx.parse

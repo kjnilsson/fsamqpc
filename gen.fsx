@@ -157,6 +157,51 @@ let genMethodParse name (fields: (string * GenType) list) =
             yield "        }"
             ]
 
+let genPropertiesParse name (fields: (string * GenType) list) =
+    let getDef =
+        function
+        | GenType.Bit -> "true"
+        | GenType.Long -> "0u"
+        | GenType.LongLong -> "0uL"
+        | GenType.ShortStr -> "\"\""
+        | GenType.LongStr -> "Array.empty"
+        | GenType.Octet -> "0uy"
+        | GenType.Short -> "0us"
+        | GenType.Table -> "Map.empty"
+        | GenType.Timestamp -> "0uL"
+    let typeName = Casing.pascal name
+    [   yield sprintf "    static member parse (payload: byte []) ="
+        match fields with
+        | [] ->
+            yield sprintf "        %s" typeName
+        | _ ->
+            yield "        let off = 12"
+            yield "        let bit = 0"
+            yield "        let off, flags = readShort payload off"
+            yield "        let withDef index f payload off def = if isSet flags index then f payload off else off, def"
+            let rec bits agg rem c b =
+                match rem with
+                | (n, Bit) :: rem ->
+                    let agg = sprintf "        let bit, off, %s = off, isSet flags %i" (camel n) c :: agg
+                    bits agg rem (c+1) (b+1)
+                | _ -> 
+                    let agg = "        let bit = 0" :: agg
+                    read agg rem (c+1)
+            and read agg rem c =
+                match rem with
+                | [] -> List.rev agg
+                | (n, Bit) :: _ -> 
+                    bits agg rem (c+1) 0 
+                | (n, t) :: rem -> 
+                    let agg = (sprintf "        let off, %s = withDef %i read%A payload off %s" (camel n) c t (getDef t)) :: agg
+                    read agg rem (c+1)
+            yield! read [] fields 0
+            yield "        {"
+            for n, t in fields do
+                yield sprintf "            %s = %s" (Casing.pascal n) (camel n)
+            yield "        }"
+            ]
+
 let rec gather agg rem =
     match rem, agg with
     | [], _ -> List.rev agg |> List.map List.rev
@@ -201,7 +246,28 @@ let genMethodPickle name (fields: (string * GenType) list) =
             yield "        |]"
             ]
 
-let genMethod name fields =
+let genPropertiesPickle name (fields: (string * GenType) list) =
+    let typeName = Casing.pascal name
+    [   yield sprintf "    static member pickle (x: %sData) =" typeName
+        match fields with
+        | [] ->
+            yield sprintf "        %s" typeName
+        | _ ->
+            yield "        [|"
+            yield sprintf "            yield! writeShort (System.UInt16.MaxValue <<< %i)" (16 - fields.Length)
+            for g in gather [] fields do
+                match g.[0] with
+                | _, Bit -> //do bits
+                    let text = g |> List.map (fst >> Casing.pascal >> sprintf "x.%s") |> (fun s -> System.String.Join("; ", s))
+                    yield (sprintf "            let bits = [ %s ]" text)
+                    yield "            yield! writeBits bits"
+                | _ -> //do others
+                    for (n, t) in g do
+                        yield sprintf "            yield! write%A x.%s" t (Casing.pascal n)
+            yield "        |]"
+            ]
+
+let genMethod id name fields =
     let typeName = Casing.pascal name
     match fields with
     | [] -> []
@@ -210,21 +276,39 @@ let genMethod name fields =
           for n, t in fields do
             yield sprintf "    %s: %A" (Casing.pascal n) t 
           yield "} with"
+          yield sprintf "    static member id = %ius" id
           yield! genMethodParse name fields
           yield! genMethodPickle name fields ]
 
+let genProperties id name fields =
+    let typeName = Casing.pascal name
+    match fields with
+    | [] -> []
+    | _ ->
+        [ yield sprintf "type %sData = {" typeName
+          for n, t in fields do
+            yield sprintf "    %s: %A" (Casing.pascal n) t 
+          yield "} with"
+          yield sprintf "    static member id = %ius" id
+          yield! genPropertiesParse name fields
+          yield! genPropertiesPickle name fields ]
+
 let genParseMethod (c: GenClass) =
     [ yield "    static member parse (payload: byte []) ="
-      yield "        match toShort payload 0, toShort payload 2 with"
+      yield "        match toShort payload 0 with"
+      yield sprintf "        | %ius ->" c.Index
+      yield "            match toShort payload 2 with"
       for m in c.Methods do
           match m.Fields with
           | [] ->
               let mn = Casing.pascal m.Name
-              yield sprintf "        | %ius, %ius -> %s" c.Index m.Index mn
+              yield sprintf "            | %ius -> %s" m.Index mn
           | _ ->
               let mn = Casing.pascal m.Name
-              yield sprintf "        | %ius, %ius -> %sData.parse payload |> %s" c.Index m.Index mn mn
-      yield "        | x -> failwith (sprintf \"%A not implemented\" x)"
+              yield sprintf "            | %ius -> %sData.parse payload |> %s" m.Index mn mn
+      yield "            | x -> failwith (sprintf \"%A not implemented\" x)"
+      yield "            |> Some"
+      yield "        | _ -> None"
       yield sprintf "    static member pickle (x: %s) = [|" (Casing.pascal c.Name)
       yield sprintf "        yield! fromShort %ius" c.Index
       yield "        match x with"
@@ -235,6 +319,9 @@ let genParseMethod (c: GenClass) =
           | _ ->
               yield sprintf "        | %s data -> yield! fromShort %ius; yield! %sData.pickle data" (Casing.pascal m.Name) m.Index (Casing.pascal m.Name)
       yield "    |]"
+      yield ""
+
+      yield sprintf "let (|%s|_|) = %s.parse" (Casing.pascal c.Name) (Casing.pascal c.Name)
     ]
 
 let genDUType (c: GenClass) =
@@ -256,13 +343,15 @@ let genClass (m: GenClass) =
       yield "#endif"
       yield "open Amqp"
       yield "\r\n"
+      yield sprintf "let classId = %ius" m.Index
+      yield "\r\n"
       match m.Properties with
       | [] -> ()
       | props ->
-        yield! genMethod (sprintf "%sProps" (camel m.Name)) props
+        yield! genProperties m.Index (sprintf "%sProps" (camel m.Name)) props
         yield "\r\n"
       for m in m.Methods do
-        yield! genMethod m.Name m.Fields
+        yield! genMethod m.Index m.Name m.Fields
         yield "\r\n" 
       yield! genDUType m
       yield! genParseMethod m ]

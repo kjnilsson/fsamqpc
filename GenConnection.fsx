@@ -5,6 +5,9 @@ module Connection
 open Amqp
 
 
+let classId = 10us
+
+
 type StartData = {
     VersionMajor: Octet
     VersionMinor: Octet
@@ -12,6 +15,7 @@ type StartData = {
     Mechanisms: LongStr
     Locales: LongStr
 } with
+    static member id = 10us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -43,6 +47,7 @@ type StartOkData = {
     Response: LongStr
     Locale: ShortStr
 } with
+    static member id = 11us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -68,6 +73,7 @@ type StartOkData = {
 type SecureData = {
     Challenge: LongStr
 } with
+    static member id = 20us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -84,6 +90,7 @@ type SecureData = {
 type SecureOkData = {
     Response: LongStr
 } with
+    static member id = 21us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -102,6 +109,7 @@ type TuneData = {
     FrameMax: Long
     Heartbeat: Short
 } with
+    static member id = 30us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -126,6 +134,7 @@ type TuneOkData = {
     FrameMax: Long
     Heartbeat: Short
 } with
+    static member id = 31us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -150,6 +159,7 @@ type OpenData = {
     Reserved1: ShortStr
     Reserved2: Bit
 } with
+    static member id = 40us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -174,6 +184,7 @@ type OpenData = {
 type OpenOkData = {
     Reserved1: ShortStr
 } with
+    static member id = 41us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -193,6 +204,7 @@ type CloseData = {
     ClassId: Short
     MethodId: Short
 } with
+    static member id = 50us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -220,6 +232,7 @@ type CloseData = {
 type BlockedData = {
     Reason: ShortStr
 } with
+    static member id = 60us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -250,20 +263,24 @@ type Connection =
     | Unblocked
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 10us, 10us -> StartData.parse payload |> Start
-        | 10us, 11us -> StartOkData.parse payload |> StartOk
-        | 10us, 20us -> SecureData.parse payload |> Secure
-        | 10us, 21us -> SecureOkData.parse payload |> SecureOk
-        | 10us, 30us -> TuneData.parse payload |> Tune
-        | 10us, 31us -> TuneOkData.parse payload |> TuneOk
-        | 10us, 40us -> OpenData.parse payload |> Open
-        | 10us, 41us -> OpenOkData.parse payload |> OpenOk
-        | 10us, 50us -> CloseData.parse payload |> Close
-        | 10us, 51us -> CloseOk
-        | 10us, 60us -> BlockedData.parse payload |> Blocked
-        | 10us, 61us -> Unblocked
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 10us ->
+            match toShort payload 2 with
+            | 10us -> StartData.parse payload |> Start
+            | 11us -> StartOkData.parse payload |> StartOk
+            | 20us -> SecureData.parse payload |> Secure
+            | 21us -> SecureOkData.parse payload |> SecureOk
+            | 30us -> TuneData.parse payload |> Tune
+            | 31us -> TuneOkData.parse payload |> TuneOk
+            | 40us -> OpenData.parse payload |> Open
+            | 41us -> OpenOkData.parse payload |> OpenOk
+            | 50us -> CloseData.parse payload |> Close
+            | 51us -> CloseOk
+            | 60us -> BlockedData.parse payload |> Blocked
+            | 61us -> Unblocked
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Connection) = [|
         yield! fromShort 10us
         match x with
@@ -280,3 +297,5 @@ with
         | Blocked data -> yield! fromShort 60us; yield! BlockedData.pickle data
         | Unblocked -> yield! fromShort 61us
     |]
+
+let (|Connection|_|) = Connection.parse

@@ -5,6 +5,9 @@ module Basic
 open Amqp
 
 
+let classId = 60us
+
+
 type BasicPropsData = {
     ContentType: ShortStr
     ContentEncoding: ShortStr
@@ -21,23 +24,26 @@ type BasicPropsData = {
     AppId: ShortStr
     ClusterId: ShortStr
 } with
+    static member id = 60us
     static member parse (payload: byte []) =
-        let off = 4
+        let off = 12
         let bit = 0
-        let off, contentType = readShortStr payload off
-        let off, contentEncoding = readShortStr payload off
-        let off, headers = readTable payload off
-        let off, deliveryMode = readOctet payload off
-        let off, priority = readOctet payload off
-        let off, correlationId = readShortStr payload off
-        let off, replyTo = readShortStr payload off
-        let off, expiration = readShortStr payload off
-        let off, messageId = readShortStr payload off
-        let off, timestamp = readTimestamp payload off
-        let off, type' = readShortStr payload off
-        let off, userId = readShortStr payload off
-        let off, appId = readShortStr payload off
-        let off, clusterId = readShortStr payload off
+        let off, flags = readShort payload off
+        let withDef index f payload off def = if isSet flags index then f payload off else off, def
+        let off, contentType = withDef 0 readShortStr payload off ""
+        let off, contentEncoding = withDef 1 readShortStr payload off ""
+        let off, headers = withDef 2 readTable payload off Map.empty
+        let off, deliveryMode = withDef 3 readOctet payload off 0uy
+        let off, priority = withDef 4 readOctet payload off 0uy
+        let off, correlationId = withDef 5 readShortStr payload off ""
+        let off, replyTo = withDef 6 readShortStr payload off ""
+        let off, expiration = withDef 7 readShortStr payload off ""
+        let off, messageId = withDef 8 readShortStr payload off ""
+        let off, timestamp = withDef 9 readTimestamp payload off 0uL
+        let off, type' = withDef 10 readShortStr payload off ""
+        let off, userId = withDef 11 readShortStr payload off ""
+        let off, appId = withDef 12 readShortStr payload off ""
+        let off, clusterId = withDef 13 readShortStr payload off ""
         {
             ContentType = contentType
             ContentEncoding = contentEncoding
@@ -56,6 +62,7 @@ type BasicPropsData = {
         }
     static member pickle (x: BasicPropsData) =
         [|
+            yield! writeShort (System.UInt16.MaxValue <<< 2)
             yield! writeShortStr x.ContentType
             yield! writeShortStr x.ContentEncoding
             yield! writeTable x.Headers
@@ -72,12 +79,31 @@ type BasicPropsData = {
             yield! writeShortStr x.ClusterId
         |]
 
+type BasicContentHeader =
+    { BodySize: LongLong
+      Props: BasicPropsData }
+    static member parse (payload: byte[]) =
+        match readShort payload 0 with
+        | _, 60us ->
+            let off, size = readLongLong payload 4
+            let props = BasicPropsData.parse payload
+            { BodySize = size
+              Props = props }
+            |> Some
+        | _ -> None
+    static member pickle (x: BasicContentHeader) =
+        [|
+            yield! writeShort 60us
+            yield! writeShort 0us
+            yield! BasicPropsData.pickle x.Props
+        |]
 
 type QosData = {
     PrefetchSize: Long
     PrefetchCount: Short
     Global: Bit
 } with
+    static member id = 10us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -111,6 +137,7 @@ type ConsumeData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 20us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -147,6 +174,7 @@ type ConsumeData = {
 type ConsumeOkData = {
     ConsumerTag: ShortStr
 } with
+    static member id = 21us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -164,6 +192,7 @@ type CancelData = {
     ConsumerTag: ShortStr
     NoWait: Bit
 } with
+    static member id = 30us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -185,6 +214,7 @@ type CancelData = {
 type CancelOkData = {
     ConsumerTag: ShortStr
 } with
+    static member id = 31us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -205,6 +235,7 @@ type PublishData = {
     Mandatory: Bit
     Immediate: Bit
 } with
+    static member id = 40us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -237,6 +268,7 @@ type ReturnData = {
     Exchange: ShortStr
     RoutingKey: ShortStr
 } with
+    static member id = 50us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -266,6 +298,7 @@ type DeliverData = {
     Exchange: ShortStr
     RoutingKey: ShortStr
 } with
+    static member id = 60us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -298,6 +331,7 @@ type GetData = {
     Queue: ShortStr
     NoAck: Bit
 } with
+    static member id = 70us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -326,6 +360,7 @@ type GetOkData = {
     RoutingKey: ShortStr
     MessageCount: Long
 } with
+    static member id = 71us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -356,6 +391,7 @@ type GetOkData = {
 type GetEmptyData = {
     Reserved1: ShortStr
 } with
+    static member id = 72us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -373,6 +409,7 @@ type AckData = {
     DeliveryTag: LongLong
     Multiple: Bit
 } with
+    static member id = 80us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -395,6 +432,7 @@ type RejectData = {
     DeliveryTag: LongLong
     Requeue: Bit
 } with
+    static member id = 90us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -416,6 +454,7 @@ type RejectData = {
 type RecoverAsyncData = {
     Requeue: Bit
 } with
+    static member id = 100us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -434,6 +473,7 @@ type RecoverAsyncData = {
 type RecoverData = {
     Requeue: Bit
 } with
+    static member id = 110us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -456,6 +496,7 @@ type NackData = {
     Multiple: Bit
     Requeue: Bit
 } with
+    static member id = 120us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -497,26 +538,30 @@ type Basic =
     | Nack of NackData
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 60us, 10us -> QosData.parse payload |> Qos
-        | 60us, 11us -> QosOk
-        | 60us, 20us -> ConsumeData.parse payload |> Consume
-        | 60us, 21us -> ConsumeOkData.parse payload |> ConsumeOk
-        | 60us, 30us -> CancelData.parse payload |> Cancel
-        | 60us, 31us -> CancelOkData.parse payload |> CancelOk
-        | 60us, 40us -> PublishData.parse payload |> Publish
-        | 60us, 50us -> ReturnData.parse payload |> Return
-        | 60us, 60us -> DeliverData.parse payload |> Deliver
-        | 60us, 70us -> GetData.parse payload |> Get
-        | 60us, 71us -> GetOkData.parse payload |> GetOk
-        | 60us, 72us -> GetEmptyData.parse payload |> GetEmpty
-        | 60us, 80us -> AckData.parse payload |> Ack
-        | 60us, 90us -> RejectData.parse payload |> Reject
-        | 60us, 100us -> RecoverAsyncData.parse payload |> RecoverAsync
-        | 60us, 110us -> RecoverData.parse payload |> Recover
-        | 60us, 111us -> RecoverOk
-        | 60us, 120us -> NackData.parse payload |> Nack
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 60us ->
+            match toShort payload 2 with
+            | 10us -> QosData.parse payload |> Qos
+            | 11us -> QosOk
+            | 20us -> ConsumeData.parse payload |> Consume
+            | 21us -> ConsumeOkData.parse payload |> ConsumeOk
+            | 30us -> CancelData.parse payload |> Cancel
+            | 31us -> CancelOkData.parse payload |> CancelOk
+            | 40us -> PublishData.parse payload |> Publish
+            | 50us -> ReturnData.parse payload |> Return
+            | 60us -> DeliverData.parse payload |> Deliver
+            | 70us -> GetData.parse payload |> Get
+            | 71us -> GetOkData.parse payload |> GetOk
+            | 72us -> GetEmptyData.parse payload |> GetEmpty
+            | 80us -> AckData.parse payload |> Ack
+            | 90us -> RejectData.parse payload |> Reject
+            | 100us -> RecoverAsyncData.parse payload |> RecoverAsync
+            | 110us -> RecoverData.parse payload |> Recover
+            | 111us -> RecoverOk
+            | 120us -> NackData.parse payload |> Nack
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Basic) = [|
         yield! fromShort 60us
         match x with
@@ -539,3 +584,5 @@ with
         | RecoverOk -> yield! fromShort 111us
         | Nack data -> yield! fromShort 120us; yield! NackData.pickle data
     |]
+
+let (|Basic|_|) = Basic.parse

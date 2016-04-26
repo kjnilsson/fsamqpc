@@ -5,9 +5,13 @@ module Channel
 open Amqp
 
 
+let classId = 20us
+
+
 type OpenData = {
     Reserved1: ShortStr
 } with
+    static member id = 10us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -24,6 +28,7 @@ type OpenData = {
 type OpenOkData = {
     Reserved1: LongStr
 } with
+    static member id = 11us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -40,6 +45,7 @@ type OpenOkData = {
 type FlowData = {
     Active: Bit
 } with
+    static member id = 20us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -58,6 +64,7 @@ type FlowData = {
 type FlowOkData = {
     Active: Bit
 } with
+    static member id = 21us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -79,6 +86,7 @@ type CloseData = {
     ClassId: Short
     MethodId: Short
 } with
+    static member id = 40us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -112,14 +120,18 @@ type Channel =
     | CloseOk
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 20us, 10us -> OpenData.parse payload |> Open
-        | 20us, 11us -> OpenOkData.parse payload |> OpenOk
-        | 20us, 20us -> FlowData.parse payload |> Flow
-        | 20us, 21us -> FlowOkData.parse payload |> FlowOk
-        | 20us, 40us -> CloseData.parse payload |> Close
-        | 20us, 41us -> CloseOk
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 20us ->
+            match toShort payload 2 with
+            | 10us -> OpenData.parse payload |> Open
+            | 11us -> OpenOkData.parse payload |> OpenOk
+            | 20us -> FlowData.parse payload |> Flow
+            | 21us -> FlowOkData.parse payload |> FlowOk
+            | 40us -> CloseData.parse payload |> Close
+            | 41us -> CloseOk
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Channel) = [|
         yield! fromShort 20us
         match x with
@@ -130,3 +142,5 @@ with
         | Close data -> yield! fromShort 40us; yield! CloseData.pickle data
         | CloseOk -> yield! fromShort 41us
     |]
+
+let (|Channel|_|) = Channel.parse

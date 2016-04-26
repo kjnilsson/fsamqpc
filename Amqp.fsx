@@ -5,8 +5,11 @@ module Amqp
 type Bit = bool
 type Octet = byte
 type Short = uint16
+type ShortInt = int16
 type Long = uint32
+type LongInt = int32
 type LongLong = uint64
+type LongLongInt = int64
 type ShortStr = string
 type Timestamp = uint64 
 type LongStr = byte []
@@ -16,7 +19,6 @@ type Field =
     | ShortShortField of int
     | ShortIntField of int16
     | LongIntField of int
-    | BitField of Bit
     | OctetField of Octet
     | ShortField of Short
     | LongField of Long
@@ -31,7 +33,6 @@ type Field =
     | TableField of Table
     | NoField 
 and Table = Map<string, Field>
-//and Table = LongStr //TEMP
 
 let ProtocolHeader = 
     [| yield! "AMQP"B; yield! [| 0uy;0uy;9uy;1uy |] |]
@@ -57,6 +58,8 @@ and Frame =
         | Header _ -> 2uy
         | Body _ -> 3uy
         | Heartbeat -> 4uy
+    static member meth c payload =
+        Method (c, payload)
     static member read (s: System.IO.Stream) =
         async {
             let! header = s.AsyncRead 7
@@ -210,7 +213,7 @@ body-payload = *OCTET
 heartbeat = %d8 %d0 %d0 frame-end
     *)
 
-let rec parseTable (data: byte []) offset =
+let rec readTable (data: byte []) offset =
     let off, len = readLong data offset |> mapSnd int
     let endOff = off + len
     let mutable c = off
@@ -222,7 +225,7 @@ let rec parseTable (data: byte []) offset =
                 | off, 't' -> off+1, BooleanField (data.[off] > 0uy) //boolean
                 | off, 'b' -> off+1, ShortShortField (data.[off] |> int) //short-short-int
                 | off, 'B' -> off+1, OctetField (data.[off]) //short-short-uint
-                | off, 'U' -> readShortInt data off |> mapSnd ShortIntField//short-int
+                | off, 'U' -> readShortInt data off |> mapSnd ShortIntField//short-int NB RMQ has this down as 's'
                 | off, 'u' -> readShort data off |> mapSnd ShortField //short-uint
                 | off, 'I' -> readLongInt data off |> mapSnd LongIntField //long-int
                 | off, 'i' -> readLong data off |> mapSnd LongField //long-uint
@@ -231,39 +234,30 @@ let rec parseTable (data: byte []) offset =
                 | off, 'f' -> readFloat data off |> mapSnd FloatField //float
                 | off, 'd' -> readDouble data off |> mapSnd DoubleField //double
                 | off, 'D' -> readDecimal data off  |> mapSnd DecimalField //decimal-value
-                | off, 's' -> readShortStr data off |> mapSnd ShortStrField //short-string
+                | off, 's' -> readShortStr data off |> mapSnd ShortStrField //short-string //NB RMQ does not implement short-str in tables
                 | off, 'S' -> readLongStr data off |> mapSnd LongStrField //long-string
                 | off, 'T' -> readTimestamp data off |> mapSnd TimestampField //timestamp
-                | off, 'F' -> parseTable data off |> mapSnd TableField//field-table
+                | off, 'F' -> readTable data off |> mapSnd TableField//field-table
                 | off, 'V' -> off, NoField
-                | off, f -> failwith (sprintf "unknown field type %A at %i" f off)
+                | off, f -> failwith (sprintf "unknown field type %c at %i" f off)
             c <- off
             yield name, field ]
     c, fields |> Map.ofList
         
-let readTable = parseTable
-
-
-let writeOctet (o: Octet) =
-    [| o |]
-
-let writeShort (o: Short) =
-    [| yield! fromShort o |]
-
-let writeLong (o: Long) =
-    [| yield! fromLong o |]
-
-let writeLongLong (o: LongLong) =
-    [| yield! fromLongLong o |]
-
+let writeOctet (o: Octet) = [| o |]
+let writeShort = fromShort
+let writeShortInt = fromShortInt
+let writeLong = fromLong
+let writeLongInt = fromLongInt
+let writeLongLongInt = fromLongLongInt
+let writeLongLong = fromLongLong
 let writeTimestamp = writeLongLong
 
+let writeFloat = fromFloat
+let writeDouble = fromDouble
 let writeLongStr (str: LongStr) =
     [| yield! fromLong (uint32 str.Length)
        yield! str |]
-
-let writeTable x = 
-    [| yield! writeLongStr [| |] |] 
 
 let writeShortStr (str: ShortStr) =
     [| yield (byte str.Length)
@@ -291,3 +285,36 @@ let writeBits (bits: bool list) : byte [] =
     |> Seq.toArray
         
 
+let writeBoolean b =
+    if b then 0uy
+    else 1uy
+
+let rec writeTableField f = [|
+    match f with
+    | BooleanField f -> yield byte 't'; yield writeBoolean f 
+    | ShortShortField f -> yield byte 'b'; yield byte f 
+    | OctetField f -> yield byte 'B'; yield f
+    | ShortIntField f -> yield byte 'U'; yield! writeShortInt f 
+    | ShortField f -> yield byte 'u'; yield! writeShort f
+    | LongIntField f -> yield byte 'I'; yield! writeLongInt f
+    | LongField f -> yield byte 'i'; yield! writeLong f 
+    | LongLongIntField f -> yield byte 'L'; yield! writeLongLongInt f
+    | LongLongField f -> yield byte 'l'; yield! writeLongLong f
+    | FloatField f -> yield byte 'f'; yield! writeFloat f
+    | DoubleField f -> yield byte 'd'; yield! writeDouble f
+    | DecimalField f -> yield byte 'D'; yield! f //TODO
+    | ShortStrField f -> yield byte 's'; yield! writeShortStr f 
+    | LongStrField f -> yield byte 'S'; yield! writeLongStr f 
+    | TimestampField f -> yield byte 'T'; yield! writeTimestamp f 
+    | TableField f -> yield byte 'F'; yield! writeTable f
+    | NoField -> yield byte 'V'
+    |]
+
+and writeTable (t: Table) = 
+    let data =
+        t 
+        |> Map.fold (fun s k v ->
+            let k = writeShortStr k
+            let v = writeTableField v
+            s ++ k ++ v) Array.empty
+    writeLong (uint32 data.Length) ++ data

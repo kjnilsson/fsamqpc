@@ -5,6 +5,9 @@ module Queue
 open Amqp
 
 
+let classId = 50us
+
+
 type DeclareData = {
     Reserved1: Short
     Queue: ShortStr
@@ -15,6 +18,7 @@ type DeclareData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 10us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -52,6 +56,7 @@ type DeclareOkData = {
     MessageCount: Long
     ConsumerCount: Long
 } with
+    static member id = 11us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -79,6 +84,7 @@ type BindData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 20us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -118,6 +124,7 @@ type UnbindData = {
     RoutingKey: ShortStr
     Arguments: Table
 } with
+    static member id = 50us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -150,6 +157,7 @@ type PurgeData = {
     Queue: ShortStr
     NoWait: Bit
 } with
+    static member id = 30us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -174,6 +182,7 @@ type PurgeData = {
 type PurgeOkData = {
     MessageCount: Long
 } with
+    static member id = 31us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -194,6 +203,7 @@ type DeleteData = {
     IfEmpty: Bit
     NoWait: Bit
 } with
+    static member id = 40us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -222,6 +232,7 @@ type DeleteData = {
 type DeleteOkData = {
     MessageCount: Long
 } with
+    static member id = 41us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -248,18 +259,22 @@ type Queue =
     | DeleteOk of DeleteOkData
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 50us, 10us -> DeclareData.parse payload |> Declare
-        | 50us, 11us -> DeclareOkData.parse payload |> DeclareOk
-        | 50us, 20us -> BindData.parse payload |> Bind
-        | 50us, 21us -> BindOk
-        | 50us, 50us -> UnbindData.parse payload |> Unbind
-        | 50us, 51us -> UnbindOk
-        | 50us, 30us -> PurgeData.parse payload |> Purge
-        | 50us, 31us -> PurgeOkData.parse payload |> PurgeOk
-        | 50us, 40us -> DeleteData.parse payload |> Delete
-        | 50us, 41us -> DeleteOkData.parse payload |> DeleteOk
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 50us ->
+            match toShort payload 2 with
+            | 10us -> DeclareData.parse payload |> Declare
+            | 11us -> DeclareOkData.parse payload |> DeclareOk
+            | 20us -> BindData.parse payload |> Bind
+            | 21us -> BindOk
+            | 50us -> UnbindData.parse payload |> Unbind
+            | 51us -> UnbindOk
+            | 30us -> PurgeData.parse payload |> Purge
+            | 31us -> PurgeOkData.parse payload |> PurgeOk
+            | 40us -> DeleteData.parse payload |> Delete
+            | 41us -> DeleteOkData.parse payload |> DeleteOk
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Queue) = [|
         yield! fromShort 50us
         match x with
@@ -274,3 +289,5 @@ with
         | Delete data -> yield! fromShort 40us; yield! DeleteData.pickle data
         | DeleteOk data -> yield! fromShort 41us; yield! DeleteOkData.pickle data
     |]
+
+let (|Queue|_|) = Queue.parse

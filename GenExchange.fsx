@@ -5,6 +5,9 @@ module Exchange
 open Amqp
 
 
+let classId = 40us
+
+
 type DeclareData = {
     Reserved1: Short
     Exchange: ShortStr
@@ -16,6 +19,7 @@ type DeclareData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 10us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -59,6 +63,7 @@ type DeleteData = {
     IfUnused: Bit
     NoWait: Bit
 } with
+    static member id = 20us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -92,6 +97,7 @@ type BindData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 30us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -132,6 +138,7 @@ type UnbindData = {
     NoWait: Bit
     Arguments: Table
 } with
+    static member id = 40us
     static member parse (payload: byte []) =
         let off = 4
         let bit = 0
@@ -175,16 +182,20 @@ type Exchange =
     | UnbindOk
 with
     static member parse (payload: byte []) =
-        match toShort payload 0, toShort payload 2 with
-        | 40us, 10us -> DeclareData.parse payload |> Declare
-        | 40us, 11us -> DeclareOk
-        | 40us, 20us -> DeleteData.parse payload |> Delete
-        | 40us, 21us -> DeleteOk
-        | 40us, 30us -> BindData.parse payload |> Bind
-        | 40us, 31us -> BindOk
-        | 40us, 40us -> UnbindData.parse payload |> Unbind
-        | 40us, 51us -> UnbindOk
-        | x -> failwith (sprintf "%A not implemented" x)
+        match toShort payload 0 with
+        | 40us ->
+            match toShort payload 2 with
+            | 10us -> DeclareData.parse payload |> Declare
+            | 11us -> DeclareOk
+            | 20us -> DeleteData.parse payload |> Delete
+            | 21us -> DeleteOk
+            | 30us -> BindData.parse payload |> Bind
+            | 31us -> BindOk
+            | 40us -> UnbindData.parse payload |> Unbind
+            | 51us -> UnbindOk
+            | x -> failwith (sprintf "%A not implemented" x)
+            |> Some
+        | _ -> None
     static member pickle (x: Exchange) = [|
         yield! fromShort 40us
         match x with
@@ -197,3 +208,5 @@ with
         | Unbind data -> yield! fromShort 40us; yield! UnbindData.pickle data
         | UnbindOk -> yield! fromShort 51us
     |]
+
+let (|Exchange|_|) = Exchange.parse
