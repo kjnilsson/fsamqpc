@@ -30,6 +30,7 @@ module Basic =
             [|
                 yield! writeShort 60us
                 yield! writeShort 0us
+                yield! writeLongLong x.BodySize
                 yield! BasicPropsData.pickle x.Props
             |]
 
@@ -48,9 +49,23 @@ module Basic =
           MessageId = ""
           Timestamp = System.DateTime.UtcNow |> DateTime.toUnix
           Type = ""
-          UserId = ""
+          UserId = "guest"
           AppId = ""
           ClusterId = "" }
+    let test () =
+        let p = 
+            { props () with
+                ContentType = "json" }
+        let payload = Array.zeroCreate 12 ++ BasicPropsData.pickle p
+        let off = 12
+        let bit = 0
+        let off, flags = readShort payload off
+        let withDef index f payload off def = 
+            if isSet flags index then f payload off else off, def
+        let off, contentType = withDef 0 readShortStr payload off ""
+        let off, contentEncoding = withDef 1 readShortStr payload off ""
+        let off, headers = withDef 2 readTable payload off Map.empty
+        payload |> BasicPropsData.parse
 
 type Connection with
     static member opn vhost =
@@ -98,10 +113,11 @@ let handshake { Vhost = vhost; Creds = user, pass } (s: IO.Stream) =
                     ( { Mechanisms = AsUTF8 (SplitBy " " (mech :: _)) 
                         Locales = AsUTF8 (SplitBy " " (locale :: _))
                         ServerProperties = props } as startData)))) ->
+                printfn "start data %A" startData
                 let startOk =
                     { ClientProperties = [ "product", LongStrField "fsamqpc"B ] |> Map.ofList 
                       Locale = locale
-                      Mechanism = mech
+                      Mechanism = "PLAIN"
                       Response = [|0uy|] ++ "guest"B ++ [|0uy|] ++ "guest"B }
                     |> StartOk
                     |> ch0Method 
@@ -182,7 +198,7 @@ and Channel (num: Short, post: ConnProto -> unit) =
                 | Receive (Method (chan, Channel.Channel msg)) -> 
                     printfn "channel method %A" msg
                 | Publish (pub, props, data) ->
-                    let pub = Basic.PublishData.pickle pub
+                    let pub = Basic.Basic.pickle (Basic.Publish pub)
                     let props = 
                         { Basic.BodySize = uint64 data.Length
                           Basic.Props = props }
@@ -190,8 +206,11 @@ and Channel (num: Short, post: ConnProto -> unit) =
                     let command = Method (num, pub)
                     let header = Header (num, props)
                     let body = Body (num, data) //TODO max body size
+                    printfn "send command"
                     post (Send command)
+                    printfn "send header"
                     post (Send header)
+                    printfn "send body"
                     post (Send body)
                 return! loop state }
         and initial state =
@@ -294,7 +313,7 @@ let conn =
     |> Async.RunSynchronously
 
 let ch = conn.OpenChannel() |> Async.RunSynchronously            
-ch.Publish("/", "test", "hi"B)
+ch.Publish("", "test", "hi"B)
 dispose ch
 (*
                         let chOpen =
@@ -309,3 +328,14 @@ dispose ch
                             Channel.Channel.parse payload |> printfn "%A"
                         | f -> printfn "got %A" f
                         *)
+
+[|0uy; 10uy; 0uy; 11uy; 0uy; 0uy; 0uy; 20uy; 7uy; 112uy; 114uy; 111uy; 100uy;
+  117uy; 99uy; 116uy; 83uy; 0uy; 0uy; 0uy; 7uy; 102uy; 115uy; 97uy; 109uy; 113uy;
+  112uy; 99uy; 8uy; 65uy; 77uy; 81uy; 80uy; 76uy; 65uy; 73uy; 78uy; 0uy; 0uy;
+  0uy; 12uy; 0uy; 103uy; 117uy; 101uy; 115uy; 116uy; 0uy; 103uy; 117uy; 101uy;
+  115uy; 116uy; 5uy; 101uy; 110uy; 95uy; 85uy; 83uy|]
+|> Connection.StartOkData.parse
+
+
+let (AsUTF8 data) = [|65uy; 77uy; 81uy; 80uy; 76uy; 65uy; 73uy; 78uy; 32uy; 80uy; 76uy; 65uy; 73uy; 78uy|]
+
