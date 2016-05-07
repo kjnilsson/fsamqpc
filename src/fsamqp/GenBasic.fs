@@ -1,9 +1,5 @@
 module Basic
-#if INTERACTIVE
-#load "Amqp.fsx"
-#endif
 open Amqp
-
 
 let classId = 60us
 
@@ -79,24 +75,6 @@ type BasicPropsData = {
             yield! writeShortStr x.ClusterId
         |]
 
-type BasicContentHeader =
-    { BodySize: LongLong
-      Props: BasicPropsData }
-    static member parse (payload: byte[]) =
-        match readShort payload 0 with
-        | _, 60us ->
-            let off, size = readLongLong payload 4
-            let props = BasicPropsData.parse payload
-            { BodySize = size
-              Props = props }
-            |> Some
-        | _ -> None
-    static member pickle (x: BasicContentHeader) =
-        [|
-            yield! writeShort 60us
-            yield! writeShort 0us
-            yield! BasicPropsData.pickle x.Props
-        |]
 
 type QosData = {
     PrefetchSize: Long

@@ -91,6 +91,9 @@ let isSet (b: uint16) index =
     let m = 1us <<< index
     b &&& m = m
 
+let setBit i (x: uint16) =
+    x ||| (1us <<< i)
+
 type Microsoft.FSharp.Control.Async with
   /// Starts the specified operation using a new CancellationToken and returns
   /// IDisposable object that cancels the computation. This method can be used

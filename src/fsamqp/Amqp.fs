@@ -1,7 +1,5 @@
 module Amqp
-#if INTERACTIVE
-#load "Pervasives.fsx"
-#endif
+
 type Bit = bool
 type Octet = byte
 type Short = uint16

@@ -1,6 +1,6 @@
 
 #if INTERACTIVE
-#load "Pervasives.fsx"
+#load "Pervasives.fs"
 #endif
 //gen
 module Casing =
@@ -338,9 +338,6 @@ let genDUType (c: GenClass) =
 
 let genClass (m: GenClass) =
     [ yield sprintf "module %s" (Casing.pascal m.Name)
-      yield "#if INTERACTIVE"
-      yield "#load \"Amqp.fsx\""
-      yield "#endif"
       yield "open Amqp"
       yield "\r\n"
       yield sprintf "let classId = %ius" m.Index
@@ -369,6 +366,6 @@ parseXml xml
 |> Seq.toList
 |> List.iter (fun c -> 
     let text = genClass c
-    System.IO.File.WriteAllText(__SOURCE_DIRECTORY__ </> "Gen" + Casing.pascal c.Name + ".fsx", text))
+    System.IO.File.WriteAllText(__SOURCE_DIRECTORY__ </> "Gen" + Casing.pascal c.Name + ".fs", text))
     
 

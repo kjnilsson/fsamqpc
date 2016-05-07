@@ -1,7 +1,4 @@
 module Queue
-#if INTERACTIVE
-#load "Amqp.fsx"
-#endif
 open Amqp
 
 

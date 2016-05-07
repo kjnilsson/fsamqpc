@@ -1,7 +1,4 @@
 module Exchange
-#if INTERACTIVE
-#load "Amqp.fsx"
-#endif
 open Amqp
 
 

@@ -2,70 +2,17 @@ open System
 open System.Text
 open System.Net.Sockets
 #if INTERACTIVE
-#load "Pervasives.fsx"
-#load "Amqp.fsx"
-#load "GenChannel.fsx"
-#load "GenBasic.fsx"
-#load "GenConnection.fsx"
+#load "./src/fsamqp/Pervasives.fs"
+#load "./src/fsamqp/Amqp.fs"
+#load "./src/fsamqp/GenConnection.fs"
+#load "./src/fsamqp/GenChannel.fs"
+#load "./src/fsamqp/GenBasic.fs"
+#load "./src/fsamqp/Basic.fs"
+#load "./src/fsamqp/Channel.fs"
 #endif
 
-open Amqp
 open Connection
-
-module Basic =
-    open Basic
-    type BasicContentHeader =
-        { BodySize: LongLong
-          Props: BasicPropsData }
-        static member parse (payload: byte[]) =
-            match readShort payload 0 with
-            | _, 60us ->
-                let off, size = readLongLong payload 4
-                let props = BasicPropsData.parse payload
-                { BodySize = size
-                  Props = props }
-                |> Some
-            | _ -> None
-        static member pickle (x: BasicContentHeader) =
-            [|
-                yield! writeShort 60us
-                yield! writeShort 0us
-                yield! writeLongLong x.BodySize
-                yield! BasicPropsData.pickle x.Props
-            |]
-
-    let (|BasicContentHeader|_|) = BasicContentHeader.parse
-
-
-    let props () =
-        { ContentType = "" 
-          ContentEncoding = ""
-          Headers = Map.empty
-          DeliveryMode = 0uy
-          Priority = 0uy
-          CorrelationId = ""
-          ReplyTo = ""
-          Expiration = ""
-          MessageId = ""
-          Timestamp = System.DateTime.UtcNow |> DateTime.toUnix
-          Type = ""
-          UserId = "guest"
-          AppId = ""
-          ClusterId = "" }
-    let test () =
-        let p = 
-            { props () with
-                ContentType = "json" }
-        let payload = Array.zeroCreate 12 ++ BasicPropsData.pickle p
-        let off = 12
-        let bit = 0
-        let off, flags = readShort payload off
-        let withDef index f payload off def = 
-            if isSet flags index then f payload off else off, def
-        let off, contentType = withDef 0 readShortStr payload off ""
-        let off, contentEncoding = withDef 1 readShortStr payload off ""
-        let off, headers = withDef 2 readTable payload off Map.empty
-        payload |> BasicPropsData.parse
+open Amqp
 
 type Connection with
     static member opn vhost =
@@ -74,16 +21,6 @@ type Connection with
           Reserved2 = true }
         |> Open
 
-type Channel.Channel with 
-    static member opn () =
-        Channel.Open { Channel.OpenData.Reserved1 = "" }
-    static member close cid =
-        { Channel.CloseData.ClassId = cid 
-          Channel.CloseData.MethodId = 0us
-          Channel.CloseData.ReplyCode = 0us
-          Channel.CloseData.ReplyText = "" }
-        |> Channel.Close 
-        
         
 type Ctx =
     { Socket: IO.Stream
@@ -178,9 +115,11 @@ let reader (s: IO.Stream) escalate =
                 escalate received }
     Async.StartDisposable loop
 
+open Basic
+open BasicExt
 type ChanProto =
     | Receive of Frame
-    | Publish of Basic.PublishData * Basic.BasicPropsData * byte []
+    | Publish of Basic.PublishData * BasicExt.BasicPropsData * byte []
 
 type ConnProto =
     | Delivery of FrameReadResult
@@ -200,9 +139,9 @@ and Channel (num: Short, post: ConnProto -> unit) =
                 | Publish (pub, props, data) ->
                     let pub = Basic.Basic.pickle (Basic.Publish pub)
                     let props = 
-                        { Basic.BodySize = uint64 data.Length
-                          Basic.Props = props }
-                        |> Basic.BasicContentHeader.pickle
+                        { BodySize = uint64 data.Length
+                          Props = props }
+                        |> BasicExt.BasicContentHeader.pickle
                     let command = Method (num, pub)
                     let header = Header (num, props)
                     let body = Body (num, data) //TODO max body size
@@ -234,8 +173,7 @@ and Channel (num: Short, post: ConnProto -> unit) =
               Basic.PublishData.RoutingKey = routingKey
               Basic.PublishData.Mandatory = false
               Basic.PublishData.Immediate = false }
-        let props = Basic.props ()
-        agent.Post(Publish (publishData, props, data))
+        agent.Post(Publish (publishData, Map.empty, data))
     interface IDisposable with
         member x.Dispose () = post (CloseChannel num)
 
@@ -315,6 +253,7 @@ let conn =
 let ch = conn.OpenChannel() |> Async.RunSynchronously            
 ch.Publish("", "test", "hi"B)
 dispose ch
+
 (*
                         let chOpen =
                             { Channel.OpenData.Reserved1 = "" }
@@ -337,5 +276,5 @@ dispose ch
 |> Connection.StartOkData.parse
 
 
-let (AsUTF8 data) = [|65uy; 77uy; 81uy; 80uy; 76uy; 65uy; 73uy; 78uy; 32uy; 80uy; 76uy; 65uy; 73uy; 78uy|]
+//let (AsUTF8 data) = [|65uy; 77uy; 81uy; 80uy; 76uy; 65uy; 73uy; 78uy; 32uy; 80uy; 76uy; 65uy; 73uy; 78uy|]
 
